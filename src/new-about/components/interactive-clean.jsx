@@ -33,14 +33,14 @@ export function InteractiveClean() {
 
   useEffect(() => {
     const dirtyImg = document.createElement("img")
-    dirtyImg.src = "/images/Lorenzo-SUJO.jpg"
+    dirtyImg.src = "/images/lofan/vbb.jpeg"
     dirtyImg.onload = () => {
       dirtyImageRef.current = dirtyImg
       renderFrame()
     }
 
     const cleanImg = document.createElement("img")
-    cleanImg.src = "/images/Lorenzo-LIMPO.jpg"
+    cleanImg.src = "/images/vedhant-about.jpeg"
     cleanImg.onload = () => {
       cleanImageRef.current = cleanImg
       renderFrame()
