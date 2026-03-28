@@ -1,22 +1,29 @@
-// interactive-portrait.tsx
+// interactive-portrait.jsx
 
-
-
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import * as THREE from "three"
 
-// Preload images to ensure they appear as early as possible
+// Preload images eagerly so they're in browser cache before component mounts
 if (typeof window !== "undefined") {
-  const img1 = new Image()
-  img1.src = "/images/hero-off.webp"
-  const img2 = new Image()
-  img2.src = "/images/hero-on.webp"
+  const link1 = document.createElement("link")
+  link1.rel = "preload"
+  link1.as = "image"
+  link1.href = "/images/hero-off.webp"
+  document.head.appendChild(link1)
+
+  const link2 = document.createElement("link")
+  link2.rel = "preload"
+  link2.as = "image"
+  link2.href = "/images/hero-on.webp"
+  document.head.appendChild(link2)
 }
 
 export default function InteractivePortrait() {
   const containerRef = useRef(null)
   const rendererRef = useRef(null)
   const animationFrameRef = useRef()
+  const fallbackRef = useRef(null)
+  const [webglReady, setWebglReady] = useState(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -24,6 +31,12 @@ export default function InteractivePortrait() {
     const container = containerRef.current
     const width = container.clientWidth
     const height = container.clientHeight
+
+    // Detect mobile for lower pixel ratio
+    const isMobile = window.innerWidth < 768
+    const pixelRatio = isMobile
+      ? Math.min(window.devicePixelRatio, 1.0)
+      : Math.min(window.devicePixelRatio, 1.25)
 
     const gu = {
       time: { value: 0 },
@@ -37,20 +50,18 @@ export default function InteractivePortrait() {
     const camera = new THREE.OrthographicCamera(width / -2, width / 2, height / 2, height / -2, 0.1, 1000)
     camera.position.z = 1
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    const renderer = new THREE.WebGLRenderer({ antialias: !isMobile, alpha: true, powerPreference: "high-performance" })
     renderer.setSize(width, height)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
+    renderer.setPixelRatio(pixelRatio)
+
+    // Start with canvas hidden — fallback image is showing
+    renderer.domElement.style.opacity = "0"
+    renderer.domElement.style.transition = "opacity 0.6s ease-out"
+
     container.appendChild(renderer.domElement)
     rendererRef.current = renderer
 
     class Blob {
-      // renderer;
-      // fbTexture;
-      // rtOutput;
-      // uniforms;
-      // rtScene;
-      // rtCamera;
-
       constructor(renderer) {
         this.renderer = renderer
         this.fbTexture = { value: new THREE.FramebufferTexture(width, height) }
@@ -62,18 +73,28 @@ export default function InteractivePortrait() {
           pointerDuration: { value: 2.5 },
         }
 
+        // Throttled mouse/touch handlers using rAF
+        let rafPending = false
+
+        const updatePointer = (clientX, clientY) => {
+          if (rafPending) return
+          rafPending = true
+          requestAnimationFrame(() => {
+            const rect = container.getBoundingClientRect()
+            this.uniforms.pointer.value.x = ((clientX - rect.left) / width) * 2 - 1
+            this.uniforms.pointer.value.y = -((clientY - rect.top) / height) * 2 + 1
+            rafPending = false
+          })
+        }
+
         const handleMouseMove = (event) => {
-          const rect = container.getBoundingClientRect()
-          this.uniforms.pointer.value.x = ((event.clientX - rect.left) / width) * 2 - 1
-          this.uniforms.pointer.value.y = -((event.clientY - rect.top) / height) * 2 + 1
+          updatePointer(event.clientX, event.clientY)
         }
 
         const handleTouchMove = (event) => {
           if (event.touches.length > 0) {
             const touch = event.touches[0]
-            const rect = container.getBoundingClientRect()
-            this.uniforms.pointer.value.x = ((touch.clientX - rect.left) / width) * 2 - 1
-            this.uniforms.pointer.value.y = -((touch.clientY - rect.top) / height) * 2 + 1
+            updatePointer(touch.clientX, touch.clientY)
           }
         }
 
@@ -89,6 +110,14 @@ export default function InteractivePortrait() {
         container.addEventListener("mouseleave", handleMouseLeave)
         container.addEventListener("touchmove", handleTouchMove, { passive: true })
         container.addEventListener("touchend", handleTouchEnd)
+
+        // Store cleanup references
+        this._cleanup = () => {
+          container.removeEventListener("mousemove", handleMouseMove)
+          container.removeEventListener("mouseleave", handleMouseLeave)
+          container.removeEventListener("touchmove", handleTouchMove)
+          container.removeEventListener("touchend", handleTouchEnd)
+        }
 
         this.rtScene = new THREE.Mesh(
           new THREE.PlaneGeometry(2, 2),
@@ -156,6 +185,24 @@ export default function InteractivePortrait() {
 
     const blob = new Blob(renderer)
 
+    let texturesLoaded = 0
+    const totalTextures = 2
+
+    const onTextureReady = () => {
+      texturesLoaded++
+      if (texturesLoaded >= totalTextures) {
+        // Both textures loaded — render one frame, then crossfade
+        blob.render()
+        renderer.render(scene, camera)
+
+        // Smoothly reveal the WebGL canvas over the fallback
+        requestAnimationFrame(() => {
+          renderer.domElement.style.opacity = "1"
+          setWebglReady(true)
+        })
+      }
+    }
+
     const textureLoader = new THREE.TextureLoader()
     const baseTexture = textureLoader.load("/images/hero-off.webp", (texture) => {
       const img = texture.image
@@ -173,9 +220,13 @@ export default function InteractivePortrait() {
       baseImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
       helmetImage.geometry.dispose()
       helmetImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
+
+      onTextureReady()
     })
 
-    const helmetTexture = textureLoader.load("/images/hero-on.webp")
+    const helmetTexture = textureLoader.load("/images/hero-on.webp", () => {
+      onTextureReady()
+    })
 
     baseTexture.colorSpace = THREE.SRGBColorSpace
     helmetTexture.colorSpace = THREE.SRGBColorSpace
@@ -204,11 +255,9 @@ export default function InteractivePortrait() {
         uniform float time; 
         varying vec4 vPosProj;
 
-        // Função de ruído simples
         float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
         float noise(vec2 p){vec2 i=floor(p);vec2 f=fract(p);f=f*f*(3.-2.*f);float a=hash(i);float b=hash(i+vec2(1.,0.));float c=hash(i+vec2(0.,1.));float d=hash(i+vec2(1.,1.));return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}
         
-        // Função de ruído orgânico (fBm)
         float fbm(vec2 p) {
             float value = 0.0;
             float amplitude = 0.5;
@@ -224,35 +273,24 @@ export default function InteractivePortrait() {
       `.replace(
         `#include <clipping_planes_fragment>`,
         `
-        // A lógica da máscara continua a mesma
         vec2 blobUV=((vPosProj.xy/vPosProj.w)+1.)*0.5;
         vec4 blobData=texture(texBlob,blobUV);
         if(blobData.r<0.02)discard;
 
-        // <<< LÓGICA ATUALIZADA PARA ANIMAÇÃO LÍQUIDA (DOMAIN WARPING) >>>
-
-        // 1. Define as cores
         vec3 colorBg = vec3(1.0);
         vec3 colorSoftShape = vec3(0.92);
         vec3 colorLine = vec3(0.8);
 
-        // 2. Coordenada base da textura (controla o "zoom")
         vec2 uv = vUv * 3.5;
 
-        // 3. Cria um "campo de distorção" que muda com o tempo
-        // Este é o nosso "líquido invisível" que vai mover a textura
         vec2 distortionField = vUv * 2.0;
-        float distortion = fbm(distortionField + time * 0.2); // O campo de distorção se move lentamente
+        float distortion = fbm(distortionField + time * 0.2);
 
-        // 4. Aplica a distorção (warp) às coordenadas da textura principal
-        // Usamos o 'distortion' para empurrar as coordenadas 'uv'
-        float distortionStrength = 0.7; // <-- CONTROLE A INTENSIDADE AQUI
+        float distortionStrength = 0.7;
         vec2 warpedUv = uv + (distortion - 0.5) * distortionStrength;
         
-        // 5. Gera o valor final do ruído a partir das coordenadas distorcidas
         float n = fbm(warpedUv);
 
-        // O resto da lógica para desenhar as formas e linhas permanece o mesmo
         float softShapeMix = smoothstep(0.1, 0.9, sin(n * 3.0));
         vec3 baseColor = mix(colorBg, colorSoftShape, softShapeMix);
         float linePattern = fract(n * 15.0);
@@ -307,6 +345,10 @@ export default function InteractivePortrait() {
     const observer = new IntersectionObserver(
       ([entry]) => {
         isVisible = entry.isIntersecting
+        // Pause/resume clock to avoid huge delta after returning
+        if (isVisible) {
+          clock.getDelta() // flush accumulated time
+        }
       },
       { threshold: 0 }
     )
@@ -362,6 +404,7 @@ export default function InteractivePortrait() {
 
     return () => {
       observer.disconnect()
+      if (blob._cleanup) blob._cleanup()
       window.removeEventListener("resize", handleResize)
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
       if (rendererRef.current) {
@@ -392,17 +435,49 @@ export default function InteractivePortrait() {
       className="fixed inset-0 w-full h-full bg-[#1a1f1a] cursor-crosshair overflow-hidden"
       style={{ touchAction: "none" }}
     >
+      {/* Fallback image: shown IMMEDIATELY at full opacity, fades out once WebGL is ready */}
+      <img
+        ref={fallbackRef}
+        src="/images/hero-off.webp"
+        alt=""
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          pointerEvents: 'none',
+          zIndex: 5,
+          opacity: webglReady ? 0 : 1,
+          transition: webglReady ? 'opacity 0.6s ease-out' : 'none',
+        }}
+      />
+      {/* Loading shimmer overlay — only visible before WebGL is ready */}
+      {!webglReady && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 6,
+            pointerEvents: 'none',
+            background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%)',
+            backgroundSize: '200% 100%',
+            animation: 'shimmer 1.5s ease-in-out infinite',
+          }}
+        />
+      )}
       <img
         src="/images/inspired-by-lando-norris.png"
         alt="Inspired by Lorenzo"
         className="absolute bottom-4 left-4 z-10 pointer-events-none"
         style={{ maxWidth: "120px", width: "clamp(60px, 15vw, 120px)", height: "auto" }}
       />
+      <style>{`
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+      `}</style>
     </div>
   )
 }
-
-
-
-
-

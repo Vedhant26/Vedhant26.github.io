@@ -86,20 +86,12 @@ body {
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  scroll-behavior: smooth;
   text-rendering: optimizeLegibility;
 }
 
-/* GPU acceleration for animated elements */
-canvas,
-.about-image,
-.project-card,
-.featured-card,
-.interest-card,
-.fame-card,
-.gallery-overlay {
-  will-change: transform, opacity;
-  transform: translateZ(0);
+/* GPU acceleration — only for continuously animated elements */
+canvas {
+  will-change: transform;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }

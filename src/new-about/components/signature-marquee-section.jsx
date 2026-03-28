@@ -1,5 +1,4 @@
 
-
 import { motion } from "framer-motion"
 
 export default function SignatureMarqueeSection() {
@@ -10,9 +9,8 @@ export default function SignatureMarqueeSection() {
         <div className="w-full overflow-hidden flex">
           <motion.div
             className="flex whitespace-nowrap"
-            animate={{ x: [0, -1000] }} // Using negative value for left-to-right movement illusion or adjust direction
-            // Let's start from -1000 to 0 to move RIGHT, or use negative keyframes for Left.
-            // Moving RIGHT: x: [-1000, 0]
+            style={{ willChange: 'transform' }}
+            animate={{ x: [0, -1000] }}
             transition={{
               x: {
                 repeat: Number.POSITIVE_INFINITY,
@@ -22,7 +20,7 @@ export default function SignatureMarqueeSection() {
               },
             }}
           >
-            {[...Array(4)].map((_, i) => (
+            {[...Array(2)].map((_, i) => (
               <h2
                 key={i}
                 className="font-[family-name:var(--font-brier)] text-[12vw] md:text-[8vw] text-[#D1FF1C] leading-[0.9] tracking-tight px-4"
@@ -31,14 +29,14 @@ export default function SignatureMarqueeSection() {
               </h2>
             ))}
           </motion.div>
-          {/* Duplicate for seamless loop if needed, or just map above ensures enough width */}
         </div>
 
         {/* Bottom Line - Moving Left */}
         <div className="w-full overflow-hidden flex">
           <motion.div
             className="flex whitespace-nowrap"
-            animate={{ x: [0, -1000] }} // Moves LEFT
+            style={{ willChange: 'transform' }}
+            animate={{ x: [0, -1000] }}
             transition={{
               x: {
                 repeat: Number.POSITIVE_INFINITY,
@@ -48,7 +46,7 @@ export default function SignatureMarqueeSection() {
               },
             }}
           >
-            {[...Array(4)].map((_, i) => (
+            {[...Array(2)].map((_, i) => (
               <h2
                 key={i}
                 className="font-[family-name:var(--font-oswald)] font-bold uppercase text-[12vw] md:text-[8vw] text-white leading-[0.9] tracking-tighter px-4"

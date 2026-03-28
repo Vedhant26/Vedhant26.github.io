@@ -37,6 +37,7 @@
     background-size: cover;
     border-radius: 50%;
     box-shadow: 0 0 20px rgba(255, 94, 0, 0.4);
+    will-change: transform;
     animation: spin 6s infinite linear;
 }
 

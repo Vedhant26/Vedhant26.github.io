@@ -14,8 +14,8 @@ export default function HeroSection() {
   })
 
   const smoothProgress = useSpring(scrollYProgress, {
-    stiffness: 100,
-    damping: 30,
+    stiffness: 60,
+    damping: 25,
     restDelta: 0.001,
   })
 

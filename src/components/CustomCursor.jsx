@@ -23,13 +23,24 @@ const CustomCursor = () => {
         setIsTouchDevice(isTouch);
         if (isTouch) return;
 
-        const moveCursor = (e) => {
-            // Update target positions
-            cursorX.set(e.clientX - 24); // Center ball (48px)
-            cursorY.set(e.clientY - 24);
+        let rafId = null;
+        let latestX = -100;
+        let latestY = -100;
 
-            dotX.set(e.clientX - 4); // Center dot (8px)
-            dotY.set(e.clientY - 4);
+        const updateCursorPosition = () => {
+            cursorX.set(latestX - 24);
+            cursorY.set(latestY - 24);
+            dotX.set(latestX - 4);
+            dotY.set(latestY - 4);
+            rafId = null;
+        };
+
+        const moveCursor = (e) => {
+            latestX = e.clientX;
+            latestY = e.clientY;
+            if (!rafId) {
+                rafId = requestAnimationFrame(updateCursorPosition);
+            }
         };
 
         const handleMouseOver = (e) => {
@@ -46,6 +57,7 @@ const CustomCursor = () => {
         return () => {
             window.removeEventListener('mousemove', moveCursor);
             window.removeEventListener('mouseover', handleMouseOver);
+            if (rafId) cancelAnimationFrame(rafId);
         };
     }, [cursorX, cursorY, dotX, dotY]);
 
