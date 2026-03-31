@@ -79,8 +79,8 @@ export default function MasonryGallerySection() {
               key={index}
               initial={{ opacity: 0, scale: 0.9 }}
               whileInView={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.4, delay: index * 0.05 }}
-              viewport={{ once: true, margin: "-50px" }}
+              transition={{ duration: 0.3, delay: index * 0.04 }}
+              viewport={{ once: true, margin: "0px" }}
               whileHover={{ scale: 1.03 }}
               style={{
                 position: 'relative',
@@ -96,6 +96,7 @@ export default function MasonryGallerySection() {
                 src={image.src || "/placeholder.svg"}
                 alt={image.alt}
                 fill
+                priority={index < 4}
                 style={{
                   objectFit: 'cover',
                   transition: 'transform 0.5s ease',

@@ -96,6 +96,8 @@ export default function NewAboutPage() {
                       <img
                         src="/images/vedhant-about.jpeg"
                         alt="Vedhant Bidari"
+                        loading="eager"
+                        decoding="async"
                         style={{
                           width: '100%',
                           height: '100%',

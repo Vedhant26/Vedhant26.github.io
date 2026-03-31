@@ -1,22 +1,16 @@
 // interactive-portrait.jsx
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState } from "react"
 import * as THREE from "three"
 
-// Preload images eagerly so they're in browser cache before component mounts
-if (typeof window !== "undefined") {
-  const link1 = document.createElement("link")
-  link1.rel = "preload"
-  link1.as = "image"
-  link1.href = "/images/hero-off.webp"
-  document.head.appendChild(link1)
+// Pre-fetch images into Image objects at module level.
+const heroOffImg = new window.Image()
+heroOffImg.crossOrigin = "anonymous"
+heroOffImg.src = "/images/hero-off.webp"
 
-  const link2 = document.createElement("link")
-  link2.rel = "preload"
-  link2.as = "image"
-  link2.href = "/images/hero-on.webp"
-  document.head.appendChild(link2)
-}
+const heroOnImg = new window.Image()
+heroOnImg.crossOrigin = "anonymous"
+heroOnImg.src = "/images/hero-on.webp"
 
 export default function InteractivePortrait() {
   const containerRef = useRef(null)
@@ -32,11 +26,8 @@ export default function InteractivePortrait() {
     const width = container.clientWidth
     const height = container.clientHeight
 
-    // Detect mobile for lower pixel ratio
     const isMobile = window.innerWidth < 768
-    const pixelRatio = isMobile
-      ? Math.min(window.devicePixelRatio, 1.0)
-      : Math.min(window.devicePixelRatio, 1.25)
+    const pixelRatio = isMobile ? Math.min(window.devicePixelRatio, 1.0) : Math.min(window.devicePixelRatio, 1.25)
 
     const gu = {
       time: { value: 0 },
@@ -45,18 +36,16 @@ export default function InteractivePortrait() {
     }
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0xffffff)
+    scene.background = new THREE.Color(0x000000)
 
     const camera = new THREE.OrthographicCamera(width / -2, width / 2, height / 2, height / -2, 0.1, 1000)
     camera.position.z = 1
 
-    const renderer = new THREE.WebGLRenderer({ antialias: !isMobile, alpha: true, powerPreference: "high-performance" })
+    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "high-performance" })
     renderer.setSize(width, height)
     renderer.setPixelRatio(pixelRatio)
-
-    // Start with canvas hidden — fallback image is showing
     renderer.domElement.style.opacity = "0"
-    renderer.domElement.style.transition = "opacity 0.6s ease-out"
+    renderer.domElement.style.transition = "opacity 0.25s ease-out"
 
     container.appendChild(renderer.domElement)
     rendererRef.current = renderer
@@ -64,8 +53,15 @@ export default function InteractivePortrait() {
     class Blob {
       constructor(renderer) {
         this.renderer = renderer
-        this.fbTexture = { value: new THREE.FramebufferTexture(width, height) }
-        this.rtOutput = new THREE.WebGLRenderTarget(width, height)
+        
+        // PING-PONG BUFFER STRATEGY:
+        // Use two render targets instead of copying the framebuffer to a texture.
+        // This is much faster as it stays on the GPU.
+        this.renderTargetA = new THREE.WebGLRenderTarget(width, height)
+        this.renderTargetB = new THREE.WebGLRenderTarget(width, height)
+        this.currentRT = this.renderTargetA
+        this.prevRT = this.renderTargetB
+
         this.uniforms = {
           pointer: { value: new THREE.Vector2().setScalar(10) },
           pointerDown: { value: 1 },
@@ -73,9 +69,7 @@ export default function InteractivePortrait() {
           pointerDuration: { value: 2.5 },
         }
 
-        // Throttled mouse/touch handlers using rAF
         let rafPending = false
-
         const updatePointer = (clientX, clientY) => {
           if (rafPending) return
           rafPending = true
@@ -87,36 +81,23 @@ export default function InteractivePortrait() {
           })
         }
 
-        const handleMouseMove = (event) => {
-          updatePointer(event.clientX, event.clientY)
-        }
-
-        const handleTouchMove = (event) => {
-          if (event.touches.length > 0) {
-            const touch = event.touches[0]
-            updatePointer(touch.clientX, touch.clientY)
-          }
-        }
-
-        const handleMouseLeave = () => {
-          this.uniforms.pointer.value.setScalar(10)
-        }
-
-        const handleTouchEnd = () => {
-          this.uniforms.pointer.value.setScalar(10)
-        }
+        const handleMouseMove = (e) => updatePointer(e.clientX, e.clientY)
+        const handleTouchMove = (e) => { if (e.touches.length > 0) updatePointer(e.touches[0].clientX, e.touches[0].clientY) }
+        const handleMouseLeave = () => this.uniforms.pointer.value.setScalar(10)
+        const handleTouchEnd = () => this.uniforms.pointer.value.setScalar(10)
 
         container.addEventListener("mousemove", handleMouseMove)
         container.addEventListener("mouseleave", handleMouseLeave)
         container.addEventListener("touchmove", handleTouchMove, { passive: true })
         container.addEventListener("touchend", handleTouchEnd)
 
-        // Store cleanup references
         this._cleanup = () => {
           container.removeEventListener("mousemove", handleMouseMove)
           container.removeEventListener("mouseleave", handleMouseLeave)
           container.removeEventListener("touchmove", handleTouchMove)
           container.removeEventListener("touchend", handleTouchEnd)
+          this.renderTargetA.dispose()
+          this.renderTargetB.dispose()
         }
 
         this.rtScene = new THREE.Mesh(
@@ -130,12 +111,12 @@ export default function InteractivePortrait() {
               shader.uniforms.pointerDown = this.uniforms.pointerDown
               shader.uniforms.pointerRadius = this.uniforms.pointerRadius
               shader.uniforms.pointerDuration = this.uniforms.pointerDuration
-              shader.uniforms.fbTexture = this.fbTexture
+              shader.uniforms.prevBuffer = { value: null } // Updated in render()
               shader.uniforms.time = gu.time
               shader.fragmentShader = `
                 uniform float dTime, aspect, pointerDown, pointerRadius, pointerDuration, time;
                 uniform vec2 pointer;
-                uniform sampler2D fbTexture;
+                uniform sampler2D prevBuffer;
                 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
                 float noise(vec2 p) {
                   vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
@@ -146,7 +127,7 @@ export default function InteractivePortrait() {
               `.replace(
                 `#include <color_fragment>`,
                 `#include <color_fragment>
-                float rVal = texture2D(fbTexture, vUv).r;
+                float rVal = texture2D(prevBuffer, vUv).r;
                 rVal -= clamp(dTime / pointerDuration, 0., 0.05);
                 rVal = clamp(rVal, 0., 1.);
                 float f = 0.;
@@ -168,6 +149,7 @@ export default function InteractivePortrait() {
                 diffuseColor.rgb = vec3(rVal);
                 `,
               )
+              this.rtMaterialShader = shader
             },
           }),
         )
@@ -176,26 +158,63 @@ export default function InteractivePortrait() {
       }
 
       render() {
-        this.renderer.setRenderTarget(this.rtOutput)
+        if (this.rtMaterialShader) {
+          this.rtMaterialShader.uniforms.prevBuffer.value = this.prevRT.texture
+        }
+        
+        this.renderer.setRenderTarget(this.currentRT)
         this.renderer.render(this.rtScene, this.rtCamera)
-        this.renderer.copyFramebufferToTexture(this.fbTexture.value)
         this.renderer.setRenderTarget(null)
+        
+        // Swap buffers (ping-pong)
+        const temp = this.currentRT
+        this.currentRT = this.prevRT
+        this.prevRT = temp
+      }
+
+      get texture() {
+        return this.prevRT.texture
       }
     }
 
     const blob = new Blob(renderer)
 
-    let texturesLoaded = 0
-    const totalTextures = 2
+    const createTextureFromCachedImage = (preloadedImg, onReady) => {
+      const texture = new THREE.Texture(preloadedImg)
+      texture.colorSpace = THREE.SRGBColorSpace
+      
+      const updateTexture = () => {
+        texture.needsUpdate = true
+        if (onReady) onReady(texture)
+      }
 
-    const onTextureReady = () => {
+      if (preloadedImg.complete && preloadedImg.naturalWidth > 0) {
+        updateTexture()
+      } else {
+        preloadedImg.addEventListener("load", updateTexture, { once: true })
+      }
+      return texture
+    }
+
+    let texturesLoaded = 0
+    const onTextureReady = (texture, isBase) => {
+      if (isBase && texture.image) {
+        const img = texture.image
+        const imgAspect = img.width / img.height
+        const containerAspect = width / height
+        let planeWidth, planeHeight
+        if (imgAspect > containerAspect) {
+          planeWidth = width; planeHeight = width / imgAspect
+        } else {
+          planeHeight = height; planeWidth = height * imgAspect
+        }
+        baseImage.geometry.dispose(); baseImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
+        helmetImage.geometry.dispose(); helmetImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
+      }
       texturesLoaded++
-      if (texturesLoaded >= totalTextures) {
-        // Both textures loaded — render one frame, then crossfade
+      if (texturesLoaded >= 2) {
         blob.render()
         renderer.render(scene, camera)
-
-        // Smoothly reveal the WebGL canvas over the fallback
         requestAnimationFrame(() => {
           renderer.domElement.style.opacity = "1"
           setWebglReady(true)
@@ -203,281 +222,121 @@ export default function InteractivePortrait() {
       }
     }
 
-    const textureLoader = new THREE.TextureLoader()
-    const baseTexture = textureLoader.load("/images/hero-off.webp", (texture) => {
-      const img = texture.image
-      const imgAspect = img.width / img.height
-      const containerAspect = width / height
-      let planeWidth, planeHeight
-      if (imgAspect > containerAspect) {
-        planeWidth = width
-        planeHeight = width / imgAspect
-      } else {
-        planeHeight = height
-        planeWidth = height * imgAspect
-      }
-      baseImage.geometry.dispose()
-      baseImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
-      helmetImage.geometry.dispose()
-      helmetImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
-
-      onTextureReady()
-    })
-
-    const helmetTexture = textureLoader.load("/images/hero-on.webp", () => {
-      onTextureReady()
-    })
-
-    baseTexture.colorSpace = THREE.SRGBColorSpace
-    helmetTexture.colorSpace = THREE.SRGBColorSpace
+    const baseTexture = createTextureFromCachedImage(heroOffImg, (tex) => onTextureReady(tex, true))
+    const helmetTexture = createTextureFromCachedImage(heroOnImg, (tex) => onTextureReady(tex, false))
 
     const baseImageMaterial = new THREE.MeshBasicMaterial({ map: baseTexture, transparent: true, alphaTest: 0.0 })
     const baseImage = new THREE.Mesh(new THREE.PlaneGeometry(width, height), baseImageMaterial)
     scene.add(baseImage)
 
-    const bgPlaneMaterial = new THREE.MeshBasicMaterial({ color: 0x1a1f1a, transparent: true })
+    const bgPlaneMaterial = new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true })
     bgPlaneMaterial.defines = { USE_UV: "" }
-
     bgPlaneMaterial.onBeforeCompile = (shader) => {
-      shader.uniforms.texBlob = { value: blob.rtOutput.texture }
+      shader.uniforms.texBlob = { value: null } // Updated in animate loop
       shader.uniforms.time = gu.time
-
-      let vertexShader = shader.vertexShader
-      vertexShader = vertexShader.replace("void main() {", "varying vec4 vPosProj;\nvoid main() {")
-      vertexShader = vertexShader.replace(
-        "#include <project_vertex>",
-        "#include <project_vertex>\nvPosProj = gl_Position;",
-      )
+      let vertexShader = shader.vertexShader.replace("void main() {", "varying vec4 vPosProj;\nvoid main() {")
+      vertexShader = vertexShader.replace("#include <project_vertex>", "#include <project_vertex>\nvPosProj = gl_Position;")
       shader.vertexShader = vertexShader
-
       shader.fragmentShader = `
-        uniform sampler2D texBlob; 
-        uniform float time; 
-        varying vec4 vPosProj;
-
+        uniform sampler2D texBlob; uniform float time; varying vec4 vPosProj;
         float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
         float noise(vec2 p){vec2 i=floor(p);vec2 f=fract(p);f=f*f*(3.-2.*f);float a=hash(i);float b=hash(i+vec2(1.,0.));float c=hash(i+vec2(0.,1.));float d=hash(i+vec2(1.,1.));return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}
-        
-        float fbm(vec2 p) {
-            float value = 0.0;
-            float amplitude = 0.5;
-            for (int i = 0; i < 4; i++) {
-                value += amplitude * noise(p);
-                p *= 2.1;
-                amplitude *= 0.3;
-            }
-            return value;
-        }
-
+        float fbm(vec2 p) { float value = 0.0; float amplitude = 0.5; for (int i = 0; i < 4; i++) { value += amplitude * noise(p); p *= 2.1; amplitude *= 0.3; } return value; }
         ${shader.fragmentShader}
-      `.replace(
-        `#include <clipping_planes_fragment>`,
-        `
+      `.replace(`#include <clipping_planes_fragment>`, `
         vec2 blobUV=((vPosProj.xy/vPosProj.w)+1.)*0.5;
         vec4 blobData=texture(texBlob,blobUV);
         if(blobData.r<0.02)discard;
-
-        vec3 colorBg = vec3(1.0);
-        vec3 colorSoftShape = vec3(0.92);
-        vec3 colorLine = vec3(0.8);
-
+        vec3 colorBg = vec3(1.0); vec3 colorSoftShape = vec3(0.92); vec3 colorLine = vec3(0.8);
         vec2 uv = vUv * 3.5;
-
-        vec2 distortionField = vUv * 2.0;
-        float distortion = fbm(distortionField + time * 0.2);
-
-        float distortionStrength = 0.7;
-        vec2 warpedUv = uv + (distortion - 0.5) * distortionStrength;
-        
+        float distortion = fbm(vUv * 2.0 + time * 0.2);
+        vec2 warpedUv = uv + (distortion - 0.5) * 0.7;
         float n = fbm(warpedUv);
-
         float softShapeMix = smoothstep(0.1, 0.9, sin(n * 3.0));
         vec3 baseColor = mix(colorBg, colorSoftShape, softShapeMix);
         float linePattern = fract(n * 15.0);
         float lineMix = 1.0 - smoothstep(0.49, 0.51, linePattern);
-        vec3 finalColor = mix(baseColor, colorLine, lineMix);
-
-        diffuseColor.rgb = finalColor;
+        diffuseColor.rgb = mix(baseColor, colorLine, lineMix);
         #include <clipping_planes_fragment>
-        `,
-      )
+      `)
+      this.bgShader = shader
     }
 
     const bgPlane = new THREE.Mesh(new THREE.PlaneGeometry(width, height), bgPlaneMaterial)
     scene.add(bgPlane)
 
     const helmetImageMaterial = new THREE.MeshBasicMaterial({ map: helmetTexture, transparent: true, alphaTest: 0.0 })
-
     helmetImageMaterial.onBeforeCompile = (shader) => {
-      shader.uniforms.texBlob = { value: blob.rtOutput.texture }
-      let vertexShader = shader.vertexShader
-      vertexShader = vertexShader.replace("void main() {", "varying vec4 vPosProj;\nvoid main() {")
-      vertexShader = vertexShader.replace(
-        "#include <project_vertex>",
-        "#include <project_vertex>\nvPosProj = gl_Position;",
-      )
+      shader.uniforms.texBlob = { value: null } // Updated in animate loop
+      let vertexShader = shader.vertexShader.replace("void main() {", "varying vec4 vPosProj;\nvoid main() {")
+      vertexShader = vertexShader.replace("#include <project_vertex>", "#include <project_vertex>\nvPosProj = gl_Position;")
       shader.vertexShader = vertexShader
-      shader.fragmentShader = `
-        uniform sampler2D texBlob; varying vec4 vPosProj;
-        ${shader.fragmentShader}
-      `.replace(
-        `#include <clipping_planes_fragment>`,
-        `
+      shader.fragmentShader = `uniform sampler2D texBlob; varying vec4 vPosProj;\n${shader.fragmentShader}`.replace(`#include <clipping_planes_fragment>`, `
         vec2 blobUV=((vPosProj.xy/vPosProj.w)+1.)*0.5;
         vec4 blobData=texture(texBlob,blobUV);
         if(blobData.r<0.02)discard;
         #include <clipping_planes_fragment>
-        `,
-      )
+      `)
+      this.helmetShader = shader
     }
 
     const helmetImage = new THREE.Mesh(new THREE.PlaneGeometry(width, height), helmetImageMaterial)
     scene.add(helmetImage)
 
-    baseImage.position.z = 0.0
-    bgPlane.position.z = 0.05
-    helmetImage.position.z = 0.1
+    baseImage.position.z = 0; bgPlane.position.z = 0.05; helmetImage.position.z = 0.1
 
     const clock = new THREE.Clock()
-    let t = 0
-    let isVisible = true
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        isVisible = entry.isIntersecting
-        // Pause/resume clock to avoid huge delta after returning
-        if (isVisible) {
-          clock.getDelta() // flush accumulated time
-        }
-      },
-      { threshold: 0 }
-    )
+    let t = 0, isVisible = true
+    const observer = new IntersectionObserver(([ent]) => {
+      isVisible = ent.isIntersecting
+      if (isVisible) clock.getDelta()
+    }, { threshold: 0 })
     observer.observe(container)
 
     const animate = () => {
       animationFrameRef.current = requestAnimationFrame(animate)
       if (!isVisible) return
-
-      const dt = clock.getDelta()
-      t += dt
-      gu.time.value = t
-      gu.dTime.value = dt
+      const dt = clock.getDelta(); t += dt
+      gu.time.value = t; gu.dTime.value = dt
       blob.render()
+      const currentTexture = blob.texture
+      if (this.bgShader) this.bgShader.uniforms.texBlob.value = currentTexture
+      if (this.helmetShader) this.helmetShader.uniforms.texBlob.value = currentTexture
       renderer.render(scene, camera)
     }
-
     animate()
 
     const handleResize = () => {
-      const newWidth = container.clientWidth
-      const newHeight = container.clientHeight
-      camera.left = newWidth / -2
-      camera.right = newWidth / 2
-      camera.top = newHeight / 2
-      camera.bottom = newHeight / -2
-      camera.updateProjectionMatrix()
-      renderer.setSize(newWidth, newHeight)
-      gu.aspect.value = newWidth / newHeight
+      const nw = container.clientWidth; const nh = container.clientHeight
+      camera.left = nw / -2; camera.right = nw / 2; camera.top = nh / 2; camera.bottom = nh / -2; camera.updateProjectionMatrix()
+      renderer.setSize(nw, nh); gu.aspect.value = nw / nh
       if (baseTexture.image) {
-        const img = baseTexture.image
-        const imgAspect = img.width / img.height
-        const containerAspect = newWidth / newHeight
-        let planeWidth, planeHeight
-        if (imgAspect > containerAspect) {
-          planeWidth = newWidth
-          planeHeight = newWidth / imgAspect
-        } else {
-          planeHeight = newHeight
-          planeWidth = newHeight * imgAspect
-        }
-        baseImage.geometry.dispose()
-        baseImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
-        helmetImage.geometry.dispose()
-        helmetImage.geometry = new THREE.PlaneGeometry(planeWidth, planeHeight)
-
-        bgPlane.geometry.dispose()
-        bgPlane.geometry = new THREE.PlaneGeometry(newWidth, newHeight)
+        const img = baseTexture.image; const ia = img.width / img.height; const ca = nw / nh
+        let pw, ph; if (ia > ca) { pw = nw; ph = nw / ia } else { ph = nh; pw = nh * ia }
+        baseImage.geometry.dispose(); baseImage.geometry = new THREE.PlaneGeometry(pw, ph)
+        helmetImage.geometry.dispose(); helmetImage.geometry = new THREE.PlaneGeometry(pw, ph)
+        bgPlane.geometry.dispose(); bgPlane.geometry = new THREE.PlaneGeometry(nw, nh)
       }
     }
-
     window.addEventListener("resize", handleResize)
 
     return () => {
-      observer.disconnect()
-      if (blob._cleanup) blob._cleanup()
-      window.removeEventListener("resize", handleResize)
+      observer.disconnect(); if (blob._cleanup) blob._cleanup(); window.removeEventListener("resize", handleResize)
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-      if (rendererRef.current) {
-        container.removeChild(rendererRef.current.domElement)
-        rendererRef.current.dispose()
-      }
-      scene.traverse((object) => {
-        if (object instanceof THREE.Mesh) {
-          object.geometry.dispose()
-          if (object.material) {
-            if (Array.isArray(object.material)) {
-              object.material.forEach((material) => material.dispose())
-            } else {
-              object.material.dispose()
-            }
-          }
-        }
-      })
-      baseTexture.dispose()
-      helmetTexture.dispose()
-      blob.rtOutput.dispose()
+      if (rendererRef.current) { container.removeChild(rendererRef.current.domElement); rendererRef.current.dispose() }
+      scene.traverse((o) => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()) } })
+      baseTexture.dispose(); helmetTexture.dispose()
     }
   }, [])
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 w-full h-full bg-[#1a1f1a] cursor-crosshair overflow-hidden"
-      style={{ touchAction: "none" }}
-    >
-      {/* Fallback image: shown IMMEDIATELY at full opacity, fades out once WebGL is ready */}
-      <img
-        ref={fallbackRef}
-        src="/images/hero-off.webp"
-        alt=""
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-          pointerEvents: 'none',
-          zIndex: 5,
-          opacity: webglReady ? 0 : 1,
-          transition: webglReady ? 'opacity 0.6s ease-out' : 'none',
-        }}
+    <div ref={containerRef} className="fixed inset-0 w-full h-full bg-[#1a1f1a] cursor-crosshair overflow-hidden" style={{ touchAction: "none" }}>
+      <img ref={fallbackRef} src="/images/hero-off.webp" alt="" loading="eager" fetchPriority="high" decoding="sync"
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none', zIndex: 5, opacity: webglReady ? 0 : 1, transition: webglReady ? 'opacity 0.25s ease-out' : 'none' }}
       />
-      {/* Loading shimmer overlay — only visible before WebGL is ready */}
-      {!webglReady && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 6,
-            pointerEvents: 'none',
-            background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%)',
-            backgroundSize: '200% 100%',
-            animation: 'shimmer 1.5s ease-in-out infinite',
-          }}
-        />
-      )}
-      <img
-        src="/images/inspired-by-lando-norris.png"
-        alt="Inspired by Lorenzo"
-        className="absolute bottom-4 left-4 z-10 pointer-events-none"
-        style={{ maxWidth: "120px", width: "clamp(60px, 15vw, 120px)", height: "auto" }}
-      />
-      <style>{`
-        @keyframes shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-      `}</style>
+      {!webglReady && <div style={{ position: 'absolute', inset: 0, zIndex: 6, pointerEvents: 'none', background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s ease-in-out infinite' }} />}
+      <img src="/images/inspired-by-lando-norris.png" alt="Inspired by Lorenzo" loading="lazy" className="absolute bottom-4 left-4 z-10 pointer-events-none" style={{ maxWidth: "120px", width: "clamp(60px, 15vw, 120px)", height: "auto" }} />
+      <style>{` @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } } `}</style>
     </div>
   )
 }

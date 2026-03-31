@@ -12,10 +12,10 @@ export default function IntroTextSection() {
         }}>
             <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
                 <motion.div
-                    initial={{ opacity: 0, y: 40 }}
+                    initial={{ opacity: 0, y: 30 }}
                     whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, margin: "-100px" }}
-                    transition={{ duration: 0.9, ease: "easeOut" }}
+                    viewport={{ once: true, margin: "-50px" }}
+                    transition={{ duration: 0.5, ease: "easeOut" }}
                     style={{ textAlign: 'left' }}
                 >
                     <h2 style={{
